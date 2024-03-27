@@ -1,0 +1,78 @@
+name: 'Push to Docker Hub & Deploy to ECS'
+description: 'Build Docker image, push to Docker Hub, and deploy to Amazon ECS'
+inputs:
+  aws-region:
+    description: 'AWS region'
+    default: 'us-east-1'
+    required: false
+  aws-access-key-id:
+    description: 'AWS access key ID'
+    required: true
+  aws-secret-access-key:
+    description: 'AWS secret access key'
+    required: true
+  docker-hub-username:
+    description: 'Docker Hub username'
+    required: true
+  docker-hub-password:
+    description: 'Docker Hub password'
+    required: true
+  dockerfile-path:
+    description: 'Path to Dockerfile'
+    required: true
+  ecs-service-name:
+    description: 'ECS Service Name'
+    required: true
+  ecs-cluster-name:
+    description: 'ECS Cluster Name'
+    required: true
+  ecs-task-definition-family:
+    description: 'ECS Task Definition Family'
+    required: true
+  container-image-name:
+    description: 'Container Image Name'
+    required: true
+  container-image-tag:
+    description: 'Container Image Tag'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Build & push Docker image
+      id: build-image
+      uses: mr-smithers-excellent/docker-build-push@v6
+      with:
+        image: ${{ inputs.docker-hub-username }}/${{ inputs.container-image-name }}
+        tags: ${{ inputs.container-image-tag }}
+        registry: docker.io
+        dockerfile: ${{ inputs.dockerfile-path }}
+        username: ${{ inputs.docker-hub-username }}
+        password: ${{ inputs.docker-hub-password }}
+
+    - name: Download task definition
+      run: |
+        aws ecs describe-task-definition --task-definition ${{ inputs.ecs-task-definition-family }} --query taskDefinition > task-definition.json
+      shell: bash
+
+    - name: Fill in the new image ID in the Amazon ECS task definition
+      id: task-def
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-definition.json
+        container-name: ${{ inputs.container-image-name }}
+        image: ${{ steps.build-image.outputs.imageFullName }}:${{ inputs.container-image-tag }}
+
+    - name: Deploy to Amazon ECS
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        service: ${{ inputs.ecs-service-name }}
+        cluster: ${{ inputs.ecs-cluster-name }}
+        wait-for-service-stability: true
